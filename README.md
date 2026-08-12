@@ -9,7 +9,7 @@
 
 ## Why
 
-Students build projects for their resumes but rarely see what a recruiter actually notices: whether the commit history looks like real work or a one-shot upload, whether the code is actually clean, and whether the repo is organized like a real project. CodeLens Agent automates that first pass, explains *why* something's flagged, and tells the student what to fix — a free second pair of eyes before they apply.
+Students build projects for their resumes but rarely see what a recruiter actually notices: whether the commit history looks like real work or a one-shot upload, whether the code is actually clean, and whether the repo is organized like a real project. RecruiterEye automates that first pass, explains *why* something's flagged, and tells the student what to fix — a free second pair of eyes before they apply.
 
 ---
 
@@ -18,7 +18,7 @@ Students build projects for their resumes but rarely see what a recruiter actual
 Four agents, each covering one thing a reviewer would look at:
 
 1. **Commit History** — does the history look incremental and real, or dumped in one go?
-2. **Code Quality** — anti-patterns, style, cited against real guidelines (Clean Code, Google Style Guide, etc.)
+2. **Code Quality** — anti-patterns, style, cited against real guidelines (Clean Code, Google Style Guide, etc.) — only run on 1-2 repos' main files, decided by a cheap LLM triage step, not blindly across everything.
 3. **Structure** — is the repo organized like a real project?
 4. **Authenticity** — takes the top 2–3 projects and checks their commit timing/diff sizes to flag "written elsewhere and pasted in" vs. built over time.
 
@@ -79,6 +79,20 @@ Notes to self:
 - `rag_retrieval` is really a tool the `code_quality_reviewer` node calls, not a separate graph node — might model it as a subgraph or just a tool call inside that node.
 - `select_top_projects` is the fan-in point — needs findings from all 3 review nodes before it can run.
 - Chatbot is a separate graph/entry point, not part of this main flow — it reads `final_review` + RAG index as context.
+- `code_quality_reviewer` doesn't pull every file. It first gets the file tree (cheap), sends just the file list to a small/cheap LLM to shortlist the 5-8 files worth reviewing, *then* pulls content only for that shortlist. Avoids blind, expensive file-by-file pulls.
+
+---
+
+## API Usage Strategy
+
+Two separate quota concerns, handled differently:
+
+**GitHub API** — single personal access token, official REST/GraphQL API only (no scraping — stays clean of GitHub's ToS and doesn't need a fallback). At ~150-200 requests per full profile review, the 5,000/hour authenticated limit comfortably supports ~25-30 reviews/hour. Not a bottleneck at this stage.
+
+**Groq API** — one account, **two separate API keys**, so the review pipeline and the chatbot don't starve each other's quota:
+- **Key A — review pipeline**: triage/classification calls (file shortlisting, authenticity timing checks) routed to a cheap/fast model (e.g. `llama-3.1-8b-instant`); the actual review writeup and final synthesis routed to the stronger model (`llama-3.3-70b-versatile`) where quality matters. Each model's quota is tracked independently even on the same key, so this effectively multiplies free capacity.
+- **Key B — chatbot**: small, spread-out message-by-message calls; rarely the bottleneck.
+- Prompts kept lean — findings are summarized before the final synthesis call rather than pasting raw diffs in, since tokens-per-minute (not daily request count) is the real ceiling on Groq's free tier.
 
 ---
 
@@ -87,12 +101,12 @@ Notes to self:
 | Layer | Tool |
 |---|---|
 | Agent Orchestration | LangGraph |
-| LLM | Groq — `llama-3.3-70b-versatile` (free tier) |
+| LLM | Groq — `llama-3.3-70b-versatile` (review/synthesis) + `llama-3.1-8b-instant` (triage/classification), free tier |
 | Backend | FastAPI |
 | Database | PostgreSQL + SQLAlchemy async |
 | Vector Store | ChromaDB |
 | Retrieval | BM25 + dense embeddings (hybrid, RRF) |
-| GitHub Data | PyGithub (API) + lightweight scraping fallback |
+| GitHub Data | PyGithub (REST + GraphQL API, no scraping) |
 | Streaming | Server-Sent Events (SSE) |
 | Eval | RAGAS |
 | Deploy | Docker + Docker Compose |
@@ -102,7 +116,7 @@ Notes to self:
 ## Project Structure
 
 ```
-codelens-agent/
+recruitereye/
 ├── backend/
 │   ├── main.py
 │   ├── routers/     # review.py, chat.py, health.py
@@ -124,11 +138,12 @@ codelens-agent/
 ## Roadmap
 
 - [ ] FastAPI backend + PostgreSQL + Docker Compose
-- [ ] GitHub fetch layer (API)
+- [ ] GitHub fetch layer (API only)
 - [ ] LangGraph agent — fetch → parse → review (commit history / code quality / structure)
 - [ ] RAG pipeline — ChromaDB + BM25 hybrid retrieval, cited guidelines
+- [ ] File-triage step for code quality review (cheap model shortlists files)
 - [ ] Authenticity check on top projects
-- [ ] Groq LLM + SSE streaming
+- [ ] Groq LLM + SSE streaming (two-key, model-routed setup)
 - [ ] RAGAS evaluation
 - [ ] Free chatbot for follow-up Q&A
 - [ ] Web UI
