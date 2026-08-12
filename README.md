@@ -1,4 +1,4 @@
-# CodeLens Agent 🔍
+# RecruiterEye
 
 > See your GitHub the way a recruiter does — before they do.
 > Paste a **GitHub profile** or a **repo/PR URL** → get an HR-lens review of your code, commit history, and project structure. **100% free.**
